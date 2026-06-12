@@ -1,0 +1,15 @@
+# Données et modèles lourds
+data/
+outputs/*.pt
+outputs/*.npy
+outputs/*.bin
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+venv/
+.env
+*.egg-info/
+dist/
+build/
+.DS_Store

@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LightGCN — Dashboard Temps Réel</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/socket.io@4.7.5/client-dist/socket.io.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg:     #05080f;
+  --s1:     #0a1020;
+  --s2:     #0f1a30;
+  --card:   #101828;
+  --border: #1a2f50;
+  --accent: #3b82f6;
+  --green:  #10b981;
+  --amber:  #f59e0b;
+  --red:    #ef4444;
+  --cyan:   #06b6d4;
+  --purple: #8b5cf6;
+  --text:   #e2e8f0;
+  --muted:  #3d5a7a;
+  --mono:   'JetBrains Mono', monospace;
+  --sans:   'Inter', sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100vh;}
+
+/* Fond grille + glow */
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:
+    linear-gradient(rgba(59,130,246,.035) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(59,130,246,.035) 1px,transparent 1px);
+  background-size:48px 48px;pointer-events:none;z-index:0;
+}
+body::after{
+  content:'';position:fixed;inset:0;
+  background:
+    radial-gradient(ellipse 80% 40% at 20% 0%,rgba(59,130,246,.07) 0%,transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 100%,rgba(16,185,129,.05) 0%,transparent 60%);
+  pointer-events:none;z-index:0;
+}
+
+.wrap{position:relative;z-index:1;max-width:1280px;margin:0 auto;padding:0 24px 80px;}
+
+/* ── Header ── */
+header{
+  padding:44px 0 36px;
+  display:flex;align-items:flex-start;justify-content:space-between;
+  flex-wrap:wrap;gap:24px;
+  border-bottom:1px solid var(--border);margin-bottom:40px;
+}
+.badge-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;}
+.badge{
+  font-family:var(--mono);font-size:10px;letter-spacing:.12em;
+  text-transform:uppercase;padding:4px 10px;border-radius:4px;border:1px solid;
+}
+.b-blue  {color:#93c5fd;border-color:rgba(59,130,246,.4);background:rgba(59,130,246,.07);}
+.b-green {color:#6ee7b7;border-color:rgba(16,185,129,.4);background:rgba(16,185,129,.07);}
+.b-purple{color:#c4b5fd;border-color:rgba(139,92,246,.4);background:rgba(139,92,246,.07);}
+
+h1{font-family:var(--mono);font-size:clamp(24px,3.5vw,42px);font-weight:700;letter-spacing:-.02em;line-height:1.1;}
+h1 em{color:var(--accent);font-style:normal;}
+.subtitle{font-size:14px;color:var(--muted);margin-top:10px;font-weight:300;line-height:1.6;}
+
+/* Status pill */
+.status-pill{
+  display:flex;align-items:center;gap:10px;padding:10px 20px;
+  border-radius:100px;border:1px solid var(--border);background:var(--s1);
+  font-family:var(--mono);font-size:12px;height:fit-content;transition:all .3s;
+}
+.status-pill.running{border-color:rgba(59,130,246,.5);background:rgba(59,130,246,.08);color:#93c5fd;}
+.status-pill.done{border-color:rgba(16,185,129,.5);background:rgba(16,185,129,.08);color:#6ee7b7;}
+.pulse{width:9px;height:9px;border-radius:50%;background:var(--muted);flex-shrink:0;}
+.pulse.active{background:var(--accent);animation:pulseAnim 1.4s ease-in-out infinite;}
+.pulse.done-dot{background:var(--green);animation:none;}
+@keyframes pulseAnim{
+  0%,100%{opacity:1;transform:scale(1);box-shadow:0 0 0 0 rgba(59,130,246,.4);}
+  50%{opacity:.8;transform:scale(1.15);box-shadow:0 0 0 7px rgba(59,130,246,0);}
+}
+
+/* Launch button */
+.launch-btn{
+  display:flex;align-items:center;gap:10px;
+  background:linear-gradient(135deg,#2563eb 0%,#1d4ed8 100%);
+  border:none;border-radius:12px;padding:15px 32px;
+  font-family:var(--mono);font-size:13px;font-weight:700;color:#fff;
+  cursor:pointer;transition:all .15s;letter-spacing:.04em;
+  box-shadow:0 4px 24px rgba(37,99,235,.35);
+}
+.launch-btn:hover{opacity:.88;transform:translateY(-1px);box-shadow:0 6px 28px rgba(37,99,235,.45);}
+.launch-btn:active{transform:scale(.97);}
+.launch-btn:disabled{opacity:.35;cursor:not-allowed;transform:none;box-shadow:none;}
+
+/* ── Section title ── */
+.sec{
+  font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--muted);margin-bottom:16px;display:flex;align-items:center;gap:12px;
+}
+.sec::after{content:'';flex:1;height:1px;background:linear-gradient(to right,var(--border),transparent);}
+
+/* ── Stat cards ── */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:40px;}
+.stat-card{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:18px 20px;position:relative;overflow:hidden;transition:border-color .2s;
+}
+.stat-card:hover{border-color:rgba(59,130,246,.4);}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--c,var(--accent));}
+.stat-label{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:8px;}
+.stat-val{font-family:var(--mono);font-size:26px;font-weight:700;color:var(--c,var(--accent));line-height:1;}
+.stat-sub{font-size:11px;color:var(--muted);margin-top:5px;}
+
+/* ── Pipeline phases ── */
+.phases-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:40px;}
+.phase-card{
+  background:var(--card);border:1px solid var(--border);
+  border-radius:12px;padding:20px 22px;transition:border-color .2s;
+}
+.phase-card.running{border-color:rgba(59,130,246,.5);}
+.phase-card.done{border-color:rgba(16,185,129,.3);}
+.phase-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
+.phase-name{font-family:var(--mono);font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;}
+.phase-icon{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.phase-status{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;border-radius:4px;}
+.ps-waiting{color:var(--muted);background:rgba(61,90,122,.15);}
+.ps-running{color:#93c5fd;background:rgba(59,130,246,.15);}
+.ps-done{color:#6ee7b7;background:rgba(16,185,129,.15);}
+.phase-pct{font-family:var(--mono);font-size:22px;font-weight:700;color:var(--text);margin-bottom:8px;}
+.phase-detail{font-size:12px;color:var(--muted);margin-bottom:12px;min-height:18px;}
+.prog-track{height:6px;background:var(--s2);border-radius:3px;overflow:hidden;}
+.prog-fill{height:100%;border-radius:3px;background:var(--accent);transition:width .5s ease;position:relative;}
+.prog-fill.running::after{
+  content:'';position:absolute;top:0;right:0;bottom:0;width:50px;
+  background:linear-gradient(to right,transparent,rgba(255,255,255,.22));
+  animation:shimmer 1.3s ease-in-out infinite;
+}
+@keyframes shimmer{0%{opacity:0;}50%{opacity:1;}100%{opacity:0;}}
+.prog-fill.done{background:var(--green);}
+.prog-fill.waiting{background:var(--muted);opacity:.2;}
+
+/* ── Training live ── */
+.training-live{margin-bottom:40px;}
+.live-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:16px;}
+.live-card{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:18px 20px;text-align:center;
+}
+.live-label{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;}
+.live-val{font-family:var(--mono);font-size:28px;font-weight:700;line-height:1;}
+.live-val.blue{color:var(--accent);}
+.live-val.green{color:var(--green);}
+.live-val.amber{color:var(--amber);}
+.epoch-bar-wrap{margin-bottom:8px;}
+.epoch-bar-header{display:flex;justify-content:space-between;margin-bottom:5px;font-family:var(--mono);font-size:11px;color:var(--muted);}
+.epoch-track{height:8px;background:var(--s2);border-radius:4px;overflow:hidden;}
+.epoch-fill{
+  height:100%;border-radius:4px;
+  background:linear-gradient(to right,var(--accent),var(--cyan));
+  transition:width .4s ease;position:relative;
+}
+.epoch-fill::after{
+  content:'';position:absolute;top:0;right:0;bottom:0;width:60px;
+  background:linear-gradient(to right,transparent,rgba(255,255,255,.2));
+  animation:shimmer 1.2s ease-in-out infinite;
+}
+
+/* ── Charts ── */
+.charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:40px;}
+@media(max-width:800px){.charts-grid{grid-template-columns:1fr;}}
+.chart-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:22px;}
+.chart-title{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text);margin-bottom:4px;}
+.chart-desc{font-size:11px;color:var(--muted);margin-bottom:16px;}
+.chart-wrap{position:relative;height:220px;}
+
+/* ── Recommendations ── */
+.reco-section{margin-bottom:40px;}
+.user-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px;}
+.user-tab{
+  font-family:var(--mono);font-size:12px;padding:8px 16px;border-radius:8px;
+  border:1px solid var(--border);background:transparent;color:var(--muted);
+  cursor:pointer;transition:all .15s;
+}
+.user-tab:hover{border-color:var(--accent);color:var(--accent);}
+.user-tab.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+.reco-panel{display:none;}
+.reco-panel.active{display:block;animation:fadeIn .3s ease;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(5px);}to{opacity:1;transform:none;}}
+.reco-header{
+  background:var(--s1);border:1px solid var(--border);border-radius:12px 12px 0 0;
+  padding:16px 22px;display:flex;align-items:center;justify-content:space-between;
+}
+.reco-user{display:flex;align-items:center;gap:14px;}
+.user-avatar{
+  width:40px;height:40px;border-radius:10px;
+  background:linear-gradient(135deg,var(--accent),var(--purple));
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:13px;font-weight:700;color:#fff;
+}
+.user-uname{font-family:var(--mono);font-size:14px;font-weight:700;}
+.user-umeta{font-size:12px;color:var(--muted);margin-top:2px;}
+.reco-list{background:var(--s2);border:1px solid var(--border);border-top:none;border-radius:0 0 12px 12px;overflow:hidden;}
+.reco-item{
+  display:flex;align-items:center;gap:14px;padding:12px 22px;
+  border-bottom:1px solid rgba(26,47,80,.5);transition:background .15s;
+}
+.reco-item:last-child{border-bottom:none;}
+.reco-item:hover{background:rgba(59,130,246,.04);}
+.reco-rank{font-family:var(--mono);font-size:12px;color:var(--muted);width:24px;text-align:right;flex-shrink:0;}
+.reco-rank.gold{color:var(--amber);font-weight:700;}
+.reco-wrap{flex:1;}
+.reco-title{font-size:14px;color:var(--text);font-weight:500;}
+.reco-bar{height:3px;background:var(--border);border-radius:2px;margin-top:4px;overflow:hidden;}
+.reco-bar-fill{height:100%;border-radius:2px;background:linear-gradient(to right,var(--accent),var(--cyan));transition:width .8s cubic-bezier(.4,0,.2,1);}
+
+/* ── Log ── */
+.log-section{margin-bottom:40px;}
+.log-box{
+  background:var(--s1);border:1px solid var(--border);border-radius:12px;
+  padding:16px 20px;max-height:200px;overflow-y:auto;
+  font-family:var(--mono);font-size:12px;line-height:1.9;
+}
+.log-line{display:flex;align-items:flex-start;gap:10px;animation:fadeIn .3s ease;}
+.log-line::before{content:'>';color:var(--accent);flex-shrink:0;margin-top:1px;}
+
+/* ── Conclusion ── */
+.conclusion-block{display:none;margin-bottom:40px;}
+.conclusion-block.visible{display:block;animation:fadeIn .5s ease;}
+.conclusion-inner{
+  background:var(--card);border:1px solid var(--border);
+  border-left:3px solid var(--accent);border-radius:12px;
+  padding:30px 34px;font-size:14px;line-height:1.9;
+}
+
+/* ── Footer ── */
+footer{
+  border-top:1px solid var(--border);padding-top:24px;
+  display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;
+  font-family:var(--mono);font-size:11px;color:var(--muted);
+}
+footer span{color:var(--accent);}
+::-webkit-scrollbar{width:4px;}
+::-webkit-scrollbar-track{background:var(--s1);}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- Header -->
+<header>
+  <div>
+    <div class="badge-row">
+      <span class="badge b-blue">ANI-IA 4 — ENSPY Yaoundé</span>
+      <span class="badge b-green">MovieLens ml-latest-small</span>
+      <span class="badge b-purple">Projet 1 — Systèmes de Recommandation</span>
+    </div>
+    <h1>Light<em>GCN</em><br>Dashboard Temps Réel</h1>
+    <p class="subtitle">
+      Graph Convolutional Network pour la recommandation de films<br>
+      Propagation d'embeddings sur graphe biparti · Perte BPR · Recall@10 &amp; NDCG@10
+    </p>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:12px;align-items:flex-end;">
+    <div class="status-pill" id="statusPill">
+      <div class="pulse" id="pulseEl"></div>
+      <span id="statusText">En attente</span>
+    </div>
+    <button class="launch-btn" id="launchBtn" onclick="startPipeline()">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <polygon points="5 3 19 12 5 21 5 3"/>
+      </svg>
+      Lancer LightGCN
+    </button>
+  </div>
+</header>
+
+<!-- Stats dataset -->
+<div class="sec">Paramètres du modèle</div>
+<div class="stats-grid" id="statsGrid">
+  <div class="stat-card" style="--c:#3b82f6"><div class="stat-label">Utilisateurs</div><div class="stat-val" id="sUsers">—</div><div class="stat-sub">après filtrage</div></div>
+  <div class="stat-card" style="--c:#10b981"><div class="stat-label">Articles</div><div class="stat-val" id="sItems">—</div><div class="stat-sub">films indexés</div></div>
+  <div class="stat-card" style="--c:#f59e0b"><div class="stat-label">Interactions</div><div class="stat-val" id="sInter">—</div><div class="stat-sub">train (leave-one-out)</div></div>
+  <div class="stat-card" style="--c:#8b5cf6"><div class="stat-label">Embedding</div><div class="stat-val">64</div><div class="stat-sub">dimensions</div></div>
+  <div class="stat-card" style="--c:#06b6d4"><div class="stat-label">Couches K</div><div class="stat-val">3</div><div class="stat-sub">propagation graphe</div></div>
+  <div class="stat-card" style="--c:#ef4444"><div class="stat-label">Époques</div><div class="stat-val">100</div><div class="stat-sub">avec BPR loss</div></div>
+</div>
+
+<!-- Pipeline phases -->
+<div class="sec">Phases d'exécution</div>
+<div class="phases-grid">
+
+  <div class="phase-card" id="phaseDataset">
+    <div class="phase-header">
+      <div class="phase-name">
+        <div class="phase-icon" style="background:rgba(59,130,246,.15);color:#93c5fd;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+          </svg>
+        </div>
+        Chargement Dataset
+      </div>
+      <span class="phase-status ps-waiting" id="stDataset">En attente</span>
+    </div>
+    <div class="phase-pct" id="pctDataset">0%</div>
+    <div class="phase-detail" id="detDataset">MovieLens ml-latest-small</div>
+    <div class="prog-track"><div class="prog-fill waiting" id="barDataset" style="width:0%"></div></div>
+  </div>
+
+  <div class="phase-card" id="phaseGraph">
+    <div class="phase-header">
+      <div class="phase-name">
+        <div class="phase-icon" style="background:rgba(16,185,129,.15);color:#6ee7b7;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+          </svg>
+        </div>
+        Graphe Biparti
+      </div>
+      <span class="phase-status ps-waiting" id="stGraph">En attente</span>
+    </div>
+    <div class="phase-pct" id="pctGraph">0%</div>
+    <div class="phase-detail" id="detGraph">Matrice d'adjacence A_hat</div>
+    <div class="prog-track"><div class="prog-fill waiting" id="barGraph" style="width:0%"></div></div>
+  </div>
+
+  <div class="phase-card" id="phaseTraining">
+    <div class="phase-header">
+      <div class="phase-name">
+        <div class="phase-icon" style="background:rgba(245,158,11,.15);color:#fcd34d;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+        </div>
+        Entraînement BPR
+      </div>
+      <span class="phase-status ps-waiting" id="stTraining">En attente</span>
+    </div>
+    <div class="phase-pct" id="pctTraining">0%</div>
+    <div class="phase-detail" id="detTraining">100 époques · Adam · BPR Loss</div>
+    <div class="prog-track"><div class="prog-fill waiting" id="barTraining" style="width:0%"></div></div>
+  </div>
+
+  <div class="phase-card" id="phaseEvaluation">
+    <div class="phase-header">
+      <div class="phase-name">
+        <div class="phase-icon" style="background:rgba(139,92,246,.15);color:#c4b5fd;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+            <polyline points="22 4 12 14.01 9 11.01"/>
+          </svg>
+        </div>
+        Évaluation Finale
+      </div>
+      <span class="phase-status ps-waiting" id="stEvaluation">En attente</span>
+    </div>
+    <div class="phase-pct" id="pctEvaluation">0%</div>
+    <div class="phase-detail" id="detEvaluation">Recall@10 · NDCG@10</div>
+    <div class="prog-track"><div class="prog-fill waiting" id="barEvaluation" style="width:0%"></div></div>
+  </div>
+
+</div>
+
+<!-- Training Live -->
+<div class="training-live" id="trainingLive" style="display:none">
+  <div class="sec">Entraînement en direct</div>
+  <div class="epoch-bar-wrap">
+    <div class="epoch-bar-header">
+      <span>Progression des époques</span>
+      <span id="epochLabel">0 / 100</span>
+    </div>
+    <div class="epoch-track">
+      <div class="epoch-fill" id="epochFill" style="width:0%"></div>
+    </div>
+  </div>
+  <div class="live-row">
+    <div class="live-card">
+      <div class="live-label">BPR Loss</div>
+      <div class="live-val blue" id="liveLoss">—</div>
+    </div>
+    <div class="live-card">
+      <div class="live-label">Recall@10</div>
+      <div class="live-val green" id="liveRecall">—</div>
+    </div>
+    <div class="live-card">
+      <div class="live-label">NDCG@10</div>
+      <div class="live-val amber" id="liveNdcg">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- Charts courbes -->
+<div class="sec">Courbes d'apprentissage</div>
+<div class="charts-grid">
+  <div class="chart-card">
+    <div class="chart-title">Perte BPR par époque</div>
+    <div class="chart-desc">Convergence de la fonction de perte Bayesian Personalized Ranking</div>
+    <div class="chart-wrap"><canvas id="lossChart"></canvas></div>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">Recall@10 &amp; NDCG@10</div>
+    <div class="chart-desc">Évolution des métriques de recommandation aux époques d'évaluation</div>
+    <div class="chart-wrap"><canvas id="metricsChart"></canvas></div>
+  </div>
+</div>
+
+<!-- Recommandations -->
+<div class="reco-section" id="recoSection" style="display:none">
+  <div class="sec">Recommandations Top-10 générées</div>
+  <div class="user-tabs" id="userTabs"></div>
+  <div id="recoPanels"></div>
+</div>
+
+<!-- Log -->
+<div class="log-section">
+  <div class="sec">Journal d'exécution</div>
+  <div class="log-box" id="logBox">
+    <div class="log-line" style="color:var(--muted)">Appuyez sur "Lancer LightGCN" pour démarrer le pipeline...</div>
+  </div>
+</div>
+
+<!-- Conclusion -->
+<div class="conclusion-block" id="conclusionBlock">
+  <div class="sec">Analyse et Conclusion</div>
+  <div class="conclusion-inner" id="conclusionInner"></div>
+</div>
+
+<!-- Footer -->
+<footer>
+  <div><span>BILOA ABADJECK Paolo</span> · M. BITHA Junior · ENSPY Yaoundé · 2025/2026</div>
+  <div>Projet 1 — LightGCN · Recommandation de Films · MovieLens</div>
+</footer>
+
+</div>
+
+<script>
+const socket = io();
+let lossChart = null, metricsChart = null;
+
+const chartBase = {
+  responsive:true, maintainAspectRatio:false,
+  plugins:{ legend:{ labels:{ color:'#94a3b8', font:{ family:'JetBrains Mono', size:11 } } } },
+  scales:{
+    x:{ grid:{ color:'rgba(26,47,80,.6)' }, ticks:{ color:'#3d5a7a', font:{ family:'JetBrains Mono', size:10 } } },
+    y:{ grid:{ color:'rgba(26,47,80,.6)' }, ticks:{ color:'#3d5a7a', font:{ family:'JetBrains Mono', size:10 } } },
+  }
+};
+
+// ── Phase updater ────────────────────────────────────────────
+function updatePhase(name, data) {
+  const pctEl = document.getElementById(`pct${cap(name)}`);
+  const barEl = document.getElementById(`bar${cap(name)}`);
+  const stEl  = document.getElementById(`st${cap(name)}`);
+  const detEl = document.getElementById(`det${cap(name)}`);
+  const card  = document.getElementById(`phase${cap(name)}`);
+  if (!pctEl) return;
+
+  pctEl.textContent  = (data.pct || 0) + '%';
+  detEl.textContent  = data.detail || '';
+  barEl.style.width  = (data.pct || 0) + '%';
+  barEl.className    = 'prog-fill ' + (data.status || 'waiting');
+  card.className     = 'phase-card ' + (data.status || '');
+  stEl.className     = 'phase-status ps-' + (data.status || 'waiting');
+  const labels = { waiting:'En attente', running:'En cours...', done:'Terminé' };
+  stEl.textContent   = labels[data.status] || data.status;
+}
+
+function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+// ── Stats ────────────────────────────────────────────────────
+function updateStats(stats) {
+  if (!stats || !stats.n_users) return;
+  const fmt = n => n >= 1000 ? (n/1000).toFixed(0)+'k' : String(n);
+  document.getElementById('sUsers').textContent = stats.n_users;
+  document.getElementById('sItems').textContent = stats.n_items;
+  document.getElementById('sInter').textContent = fmt(stats.n_train);
+}
+
+// ── Charts ───────────────────────────────────────────────────
+function updateCharts(tr) {
+  const epochs  = Array.from({length: tr.loss_history.length}, (_,i) => i+1);
+  const eHistory = tr.epoch_history;
+
+  if (lossChart) lossChart.destroy();
+  lossChart = new Chart(document.getElementById('lossChart'), {
+    type:'line',
+    data:{
+      labels: epochs,
+      datasets:[{
+        label:'BPR Loss',
+        data: tr.loss_history,
+        borderColor:'#ef4444', backgroundColor:'rgba(239,68,68,.07)',
+        fill:true, tension:.4, pointRadius:0, borderWidth:2,
+      }]
+    },
+    options:{ ...chartBase }
+  });
+
+  if (eHistory.length > 0) {
+    if (metricsChart) metricsChart.destroy();
+    metricsChart = new Chart(document.getElementById('metricsChart'), {
+      type:'line',
+      data:{
+        labels: eHistory,
+        datasets:[
+          { label:`Recall@10`, data: tr.recall_history,
+            borderColor:'#10b981', backgroundColor:'rgba(16,185,129,.07)',
+            fill:true, tension:.4, pointRadius:4, pointBackgroundColor:'#10b981', borderWidth:2 },
+          { label:`NDCG@10`, data: tr.ndcg_history,
+            borderColor:'#f59e0b', backgroundColor:'rgba(245,158,11,.07)',
+            fill:true, tension:.4, pointRadius:4, pointBackgroundColor:'#f59e0b', borderWidth:2 },
+        ]
+      },
+      options:{ ...chartBase }
+    });
+  }
+}
+
+// ── Recommandations ──────────────────────────────────────────
+function buildRecommendations(recs) {
+  if (!recs || !recs.length) return;
+  document.getElementById('recoSection').style.display = 'block';
+  const tabsEl   = document.getElementById('userTabs');
+  const panelsEl = document.getElementById('recoPanels');
+  tabsEl.innerHTML = panelsEl.innerHTML = '';
+
+  recs.forEach((u, i) => {
+    const tab = document.createElement('button');
+    tab.className = 'user-tab' + (i === 0 ? ' active' : '');
+    tab.textContent = `User #${u.user_idx}`;
+    tab.onclick = () => {
+      document.querySelectorAll('.user-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.reco-panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById(`rp-${u.user_idx}`).classList.add('active');
+    };
+    tabsEl.appendChild(tab);
+
+    const maxScore = u.recs.length;
+    const panel = document.createElement('div');
+    panel.className = 'reco-panel' + (i === 0 ? ' active' : '');
+    panel.id = `rp-${u.user_idx}`;
+    panel.innerHTML = `
+      <div class="reco-header">
+        <div class="reco-user">
+          <div class="user-avatar">U${u.user_idx}</div>
+          <div>
+            <div class="user-uname">Utilisateur #${u.user_idx}</div>
+            <div class="user-umeta">${u.n_seen.toLocaleString()} films visionnés · Top-10 personnalisé</div>
+          </div>
+        </div>
+      </div>
+      <div class="reco-list">
+        ${u.recs.map((r,j) => `
+          <div class="reco-item">
+            <div class="reco-rank ${r.rank <= 3 ? 'gold' : ''}">${String(r.rank).padStart(2,'0')}</div>
+            <div class="reco-wrap">
+              <div class="reco-title">${r.title}</div>
+              <div class="reco-bar">
+                <div class="reco-bar-fill" style="width:${Math.round((1-j/u.recs.length)*100)}%"></div>
+              </div>
+            </div>
+          </div>`).join('')}
+      </div>`;
+    panelsEl.appendChild(panel);
+  });
+}
+
+// ── Conclusion ───────────────────────────────────────────────
+function buildConclusion(c) {
+  if (!c || !c.recall) return;
+  const block = document.getElementById('conclusionBlock');
+  block.className = 'conclusion-block visible';
+  block.scrollIntoView({ behavior:'smooth', block:'start' });
+
+  const qualColor = c.quality === 'excellent' ? 'var(--green)'
+    : c.quality === 'tres bon' ? 'var(--cyan)'
+    : c.quality === 'bon' ? 'var(--accent)'
+    : 'var(--amber)';
+
+  document.getElementById('conclusionInner').innerHTML = `
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:24px;">
+      <div style="width:4px;height:56px;background:var(--accent);border-radius:2px;flex-shrink:0;"></div>
+      <div>
+        <div style="font-family:var(--mono);font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--accent);margin-bottom:5px;">
+          Synthèse des résultats — Projet 1 ANI-IA 4
+        </div>
+        <div style="font-family:var(--mono);font-size:18px;font-weight:700;">
+          LightGCN entraîné sur MovieLens — résultats
+          <span style="color:${qualColor}">${c.quality}</span>
+        </div>
+      </div>
+    </div>
+
+    <p style="margin-bottom:16px;">
+      Le modèle <strong>LightGCN</strong> (Light Graph Convolutional Network) a été entraîné
+      de bout en bout sur le dataset MovieLens ml-latest-small comprenant
+      <strong>${c.n_users} utilisateurs</strong>, <strong>${c.n_items} films</strong>
+      et <strong>${c.n_train.toLocaleString()} interactions</strong> d'entraînement
+      (stratégie leave-one-out). Après <strong>100 époques</strong> d'optimisation par
+      gradient descent avec la perte BPR (Bayesian Personalized Ranking), le modèle atteint
+      un <strong style="color:var(--green)">Recall@10 = ${c.recall}</strong> et un
+      <strong style="color:var(--amber)">NDCG@10 = ${c.ndcg}</strong>.
+    </p>
+
+    <p style="margin-bottom:16px;">
+      La perte BPR a convergé de <strong>${c.loss_start}</strong> à
+      <strong>${c.loss_end}</strong>, soit une réduction de
+      <strong style="color:var(--cyan)">${c.loss_drop}%</strong>, confirmant que
+      le modèle a bien appris à distinguer les articles pertinents des articles aléatoires
+      pour chaque utilisateur. Le Recall@10 a progressé de ${c.recall_start} à ${c.recall}
+      entre la première et la dernière époque d'évaluation
+      (meilleur résultat à l'époque <strong>${c.best_epoch}</strong>),
+      soit une amélioration de <strong style="color:var(--green)">${c.recall_gain}%</strong>.
+    </p>
+
+    <p style="margin-bottom:16px;">
+      Ces valeurs sont <strong style="color:${qualColor}">${c.quality}es</strong>
+      pour ce dataset avec cette architecture.
+      Un Recall@10 de ${c.recall} signifie que dans ${Math.round(c.recall*100)}% des cas,
+      le film réellement regardé par l'utilisateur figure parmi les 10 films recommandés —
+      ce qui est cohérent avec la littérature pour LightGCN sur MovieLens small
+      (dataset de ${c.n_items} films, problème difficile).
+      Le NDCG@10 = ${c.ndcg} indique que les films pertinents sont
+      tendanciellement placés en haut de la liste plutôt qu'en bas.
+    </p>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin-top:24px;padding-top:24px;border-top:1px solid var(--border);">
+      <div style="background:var(--s1);border-radius:10px;padding:16px 18px;border-left:3px solid var(--green);">
+        <div style="font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--green);margin-bottom:8px;">Ce qui fonctionne bien</div>
+        <div style="font-size:13px;color:var(--text);line-height:1.7;">
+          La propagation sur K=3 couches capture efficacement les préférences
+          des utilisateurs voisins. Les embeddings appris sont cohérents —
+          les films similaires se regroupent dans l'espace vectoriel (visible sur t-SNE).
+        </div>
+      </div>
+      <div style="background:var(--s1);border-radius:10px;padding:16px 18px;border-left:3px solid var(--amber);">
+        <div style="font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--amber);margin-bottom:8px;">Limite principale</div>
+        <div style="font-size:13px;color:var(--text);line-height:1.7;">
+          Le dataset est petit (${c.n_users} users), ce qui limite les performances.
+          La stratégie leave-one-out est sévère : un seul film de test par utilisateur.
+          Sur un dataset plus large, LightGCN atteint Recall@20 > 0.15.
+        </div>
+      </div>
+      <div style="background:var(--s1);border-radius:10px;padding:16px 18px;border-left:3px solid var(--cyan);">
+        <div style="font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--cyan);margin-bottom:8px;">Piste d'amélioration</div>
+        <div style="font-size:13px;color:var(--text);line-height:1.7;">
+          Augmenter la dimension des embeddings à 128, passer à K=4 couches,
+          entraîner sur 200 époques ou utiliser MovieLens-1M (1 million d'interactions)
+          pour des métriques significativement meilleures.
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ── Socket handler ───────────────────────────────────────────
+socket.on('update', data => {
+  const pill   = document.getElementById('statusPill');
+  const pulse  = document.getElementById('pulseEl');
+  const stText = document.getElementById('statusText');
+  const btn    = document.getElementById('launchBtn');
+
+  if (data.running) {
+    pill.className = 'status-pill running'; pulse.className = 'pulse active';
+    stText.textContent = 'Pipeline en cours...'; btn.disabled = true;
+    document.getElementById('trainingLive').style.display = 'block';
+  } else if (data.done) {
+    pill.className = 'status-pill done'; pulse.className = 'pulse done-dot';
+    stText.textContent = 'Terminé'; btn.disabled = false;
+    btn.innerHTML = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg> Relancer`;
+  } else {
+    pill.className = 'status-pill'; pulse.className = 'pulse';
+    stText.textContent = 'En attente'; btn.disabled = false;
+  }
+
+  // Phases
+  if (data.progress) {
+    for (const [name, p] of Object.entries(data.progress)) updatePhase(name, p);
+  }
+
+  // Stats
+  if (data.stats) updateStats(data.stats);
+
+  // Entraînement live
+  if (data.training) {
+    const tr = data.training;
+    const pct = tr.total > 0 ? Math.round((tr.epoch / tr.total) * 100) : 0;
+    document.getElementById('epochLabel').textContent = `${tr.epoch} / ${tr.total}`;
+    document.getElementById('epochFill').style.width = pct + '%';
+    document.getElementById('liveLoss').textContent   = tr.loss   || '—';
+    document.getElementById('liveRecall').textContent = tr.recall || '—';
+    document.getElementById('liveNdcg').textContent   = tr.ndcg   || '—';
+
+    if (tr.loss_history && tr.loss_history.length > 1) updateCharts(tr);
+  }
+
+  // Log
+  if (data.pipeline && data.pipeline.length) {
+    const box = document.getElementById('logBox');
+    box.innerHTML = data.pipeline.map(l => `<div class="log-line">${l}</div>`).join('');
+    box.scrollTop = box.scrollHeight;
+  }
+
+  // Recommandations
+  if (data.recommendations && data.recommendations.length) {
+    buildRecommendations(data.recommendations);
+  }
+
+  // Conclusion
+  if (data.conclusion && data.conclusion.recall) buildConclusion(data.conclusion);
+});
+
+// ── Start ────────────────────────────────────────────────────
+function startPipeline() {
+  if (lossChart)    { lossChart.destroy();    lossChart    = null; }
+  if (metricsChart) { metricsChart.destroy(); metricsChart = null; }
+  document.getElementById('logBox').innerHTML =
+    '<div class="log-line">Initialisation du pipeline LightGCN...</div>';
+  document.getElementById('recoSection').style.display = 'none';
+  document.getElementById('conclusionBlock').className = 'conclusion-block';
+  document.getElementById('trainingLive').style.display = 'none';
+  socket.emit('start');
+}
+
+socket.emit('get_state');
+</script>
+</body>
+</html>
