@@ -417,6 +417,87 @@ footer span{color:var(--accent);}
   <div id="recoPanels"></div>
 </div>
 
+<!-- ========================================================= -->
+<!-- RECHERCHE EN DIRECT PAR UTILISATEUR                       -->
+<!-- ========================================================= -->
+<div class="sec">Recherche en Direct — Par Numéro d'Utilisateur</div>
+<div style="margin-bottom:40px;">
+  <div style="display:grid;grid-template-columns:300px 1fr;gap:20px;align-items:start;">
+
+    <!-- Zone de saisie -->
+    <div>
+      <div style="background:var(--card);border:1px solid var(--border);
+        border-radius:14px;padding:22px;">
+        <div style="font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+          text-transform:uppercase;color:var(--muted);margin-bottom:10px;">
+          Numero d'utilisateur
+        </div>
+        <input type="number" id="userInput" min="0" placeholder="ex: 42"
+          style="width:100%;background:var(--s1);border:1px solid var(--border);
+          border-radius:8px;padding:12px 14px;font-family:var(--mono);
+          font-size:16px;color:var(--text);outline:none;margin-bottom:12px;"
+          onkeydown="if(event.key==='Enter') searchUser()">
+        <button onclick="searchUser()" id="searchUserBtn" style="
+          width:100%;background:linear-gradient(135deg,#2563eb,#1d4ed8);
+          border:none;border-radius:10px;padding:13px;
+          font-family:var(--mono);font-size:13px;font-weight:700;
+          color:#fff;cursor:pointer;box-shadow:0 4px 20px rgba(37,99,235,.3);
+          display:flex;align-items:center;justify-content:center;gap:8px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2.5">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          Obtenir les recommandations
+        </button>
+        <div id="userSearchStatus" style="margin-top:10px;font-family:var(--mono);
+          font-size:11px;color:var(--muted);text-align:center;min-height:18px;"></div>
+
+        <!-- Profil utilisateur -->
+        <div id="userProfile" style="display:none;margin-top:16px;">
+          <div style="font-family:var(--mono);font-size:10px;letter-spacing:.12em;
+            text-transform:uppercase;color:var(--amber);margin-bottom:8px;">
+            Profil — Films deja vus
+          </div>
+          <div id="userSeenList" style="font-size:12px;color:var(--muted);
+            line-height:1.8;max-height:200px;overflow-y:auto;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Resultats -->
+    <div>
+      <div id="liveRecoResults" style="display:flex;align-items:center;
+        justify-content:center;color:var(--muted);font-family:var(--mono);
+        font-size:12px;background:var(--s1);border:1px solid var(--border);
+        border-radius:12px;padding:40px;min-height:180px;">
+        Les recommandations apparaitront ici
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================================= -->
+<!-- VISUALISATION t-SNE                                       -->
+<!-- ========================================================= -->
+<div class="sec" id="tsneSecTitle" style="display:none">Visualisation t-SNE — Embeddings des Films</div>
+<div id="tsneSection" style="display:none;margin-bottom:40px;">
+  <div style="background:var(--card);border:1px solid var(--border);
+    border-radius:12px;padding:22px;">
+    <div style="font-family:var(--mono);font-size:12px;font-weight:600;
+      color:var(--text);margin-bottom:4px;">Projection 2D des embeddings films (t-SNE)</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:16px;">
+      Chaque point = 1 film. Les films similaires sont proches. Survoler pour voir le titre.
+    </div>
+    <canvas id="tsneChart" style="width:100%;height:420px;cursor:crosshair;"></canvas>
+    <div id="tsneTooltip" style="display:none;position:fixed;
+      background:var(--card);border:1px solid var(--accent);
+      border-radius:6px;padding:8px 12px;font-family:var(--mono);
+      font-size:11px;color:var(--text);pointer-events:none;z-index:999;
+      max-width:220px;"></div>
+  </div>
+</div>
+
 <!-- Log -->
 <div class="log-section">
   <div class="sec">Journal d'exécution</div>
@@ -660,7 +741,248 @@ function buildConclusion(c) {
   `;
 }
 
-// ── Socket handler ───────────────────────────────────────────
+// ── Start ────────────────────────────────────────────────────
+function startPipeline() {
+  if (lossChart)    { lossChart.destroy();    lossChart    = null; }
+  if (metricsChart) { metricsChart.destroy(); metricsChart = null; }
+  document.getElementById('logBox').innerHTML =
+    '<div class="log-line">Initialisation du pipeline LightGCN...</div>';
+  document.getElementById('recoSection').style.display = 'none';
+  document.getElementById('conclusionBlock').className = 'conclusion-block';
+  document.getElementById('trainingLive').style.display = 'none';
+  socket.emit('start');
+}
+
+// ── Recherche en direct par utilisateur ──────────────────────
+async function searchUser() {
+  const input  = document.getElementById('userInput');
+  const status = document.getElementById('userSearchStatus');
+  const resDiv = document.getElementById('liveRecoResults');
+  const profil = document.getElementById('userProfile');
+  const uid    = parseInt(input.value);
+
+  if (isNaN(uid)) {
+    status.textContent = 'Entrez un numero valide.';
+    status.style.color = 'var(--red,#ef4444)';
+    return;
+  }
+
+  status.textContent = 'Recherche en cours...';
+  status.style.color = 'var(--accent)';
+  resDiv.innerHTML   = `
+    <div style="display:flex;align-items:center;justify-content:center;
+      gap:12px;color:var(--accent);font-family:var(--mono);font-size:12px;
+      background:var(--s1);border:1px solid var(--border);border-radius:12px;
+      padding:40px;min-height:180px;">
+      <div style="width:18px;height:18px;border:2px solid var(--border);
+        border-top-color:var(--accent);border-radius:50%;
+        animation:spin .7s linear infinite;"></div>
+      Calcul des recommandations...
+    </div>
+    <style>@keyframes spin{to{transform:rotate(360deg);}}</style>`;
+  profil.style.display = 'none';
+
+  try {
+    const resp = await fetch('/recommend', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({user_idx: uid})
+    });
+    const data = await resp.json();
+    if (data.error) {
+      status.textContent = data.error;
+      status.style.color = 'var(--red,#ef4444)';
+      resDiv.innerHTML   = `<div style="color:var(--muted);font-family:var(--mono);
+        font-size:12px;padding:40px;text-align:center;">${data.error}</div>`;
+      return;
+    }
+
+    // Afficher le profil
+    profil.style.display = 'block';
+    document.getElementById('userSeenList').innerHTML =
+      data.seen_titles.length
+        ? data.seen_titles.map((t,i) =>
+            `<div style="padding:3px 0;border-bottom:1px solid var(--border);">
+              <span style="color:var(--muted)">${i+1}.</span>
+              <span style="color:var(--text);margin-left:6px;">${t}</span>
+            </div>`).join('') +
+          (data.n_seen > data.seen_titles.length
+            ? `<div style="color:var(--muted);margin-top:6px;font-size:11px;">
+                + ${data.n_seen - data.seen_titles.length} autres films...</div>` : '')
+        : '<span style="color:var(--muted)">Aucun film vu.</span>';
+
+    // Afficher les recommandations
+    resDiv.innerHTML = `
+      <div style="background:var(--s1);border:1px solid var(--border);
+        border-radius:12px;overflow:hidden;">
+        <div style="padding:14px 18px;background:rgba(59,130,246,.08);
+          border-bottom:1px solid var(--border);display:flex;
+          align-items:center;justify-content:space-between;">
+          <div>
+            <div style="font-family:var(--mono);font-size:14px;font-weight:700;">
+              Utilisateur #${data.user_idx}
+            </div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px;">
+              ${data.n_seen} films vus · Top-${data.recs.length} recommandations
+            </div>
+          </div>
+          <div style="font-family:var(--mono);font-size:11px;color:var(--green);">
+            LIVE
+          </div>
+        </div>
+        ${data.recs.map((r,j) => `
+          <div style="display:flex;align-items:center;gap:14px;padding:11px 18px;
+            border-bottom:1px solid rgba(26,47,80,.4);
+            transition:background .15s;"
+            onmouseover="this.style.background='rgba(59,130,246,.05)'"
+            onmouseout="this.style.background='transparent'">
+            <div style="font-family:var(--mono);font-size:12px;
+              color:${r.rank<=3?'var(--amber)':'var(--muted)'};
+              font-weight:${r.rank<=3?'700':'400'};width:24px;
+              text-align:right;flex-shrink:0;">${String(r.rank).padStart(2,'0')}</div>
+            <div style="flex:1;">
+              <div style="font-size:14px;color:var(--text);font-weight:500;">
+                ${r.title}
+              </div>
+              <div style="height:3px;background:var(--border);border-radius:2px;
+                margin-top:4px;overflow:hidden;">
+                <div style="height:100%;border-radius:2px;
+                  background:linear-gradient(to right,var(--accent),var(--cyan));
+                  width:${Math.round((1-j/data.recs.length)*100)}%;"></div>
+              </div>
+            </div>
+            <div style="font-family:var(--mono);font-size:11px;
+              color:var(--cyan);flex-shrink:0;">${r.score}</div>
+          </div>`).join('')}
+      </div>`;
+
+    status.textContent = `Top-${data.recs.length} genere avec succes`;
+    status.style.color = 'var(--green)';
+
+  } catch(e) {
+    status.textContent = 'Erreur : ' + e.message;
+    status.style.color = 'var(--red,#ef4444)';
+  }
+}
+
+// ── Visualisation t-SNE ───────────────────────────────────────
+let tsneCanvas = null;
+
+function buildTsne(pts) {
+  if (!pts || pts.length === 0) return;
+  document.getElementById('tsneSection').style.display = 'block';
+  document.getElementById('tsneSecTitle').style.display = 'flex';
+
+  const canvas  = document.getElementById('tsneChart');
+  const tooltip = document.getElementById('tsneTooltip');
+
+  // Palette de couleurs par genre
+  const genreColors = {};
+  const palette = [
+    '#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6',
+    '#06b6d4','#ec4899','#84cc16','#f97316','#6366f1',
+    '#14b8a6','#a855f7','#eab308','#22c55e','#0ea5e9'
+  ];
+  let colorIdx = 0;
+
+  pts.forEach(p => {
+    if (!genreColors[p.genre]) {
+      genreColors[p.genre] = palette[colorIdx % palette.length];
+      colorIdx++;
+    }
+  });
+
+  // Normaliser les coordonnees en pixels canvas
+  const W = canvas.offsetWidth || 800;
+  const H = 420;
+  canvas.width  = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const yMin = Math.min(...ys), yMax = Math.max(...ys);
+  const pad  = 30;
+
+  function toCanvasX(x) {
+    return pad + (x - xMin) / (xMax - xMin) * (W - 2*pad);
+  }
+  function toCanvasY(y) {
+    return pad + (y - yMin) / (yMax - yMin) * (H - 2*pad);
+  }
+
+  // Fond
+  ctx.fillStyle = '#101828';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grille legere
+  ctx.strokeStyle = 'rgba(26,47,80,.4)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 10; i++) {
+    const x = pad + i * (W - 2*pad) / 10;
+    const y = pad + i * (H - 2*pad) / 10;
+    ctx.beginPath(); ctx.moveTo(x, pad); ctx.lineTo(x, H-pad); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W-pad, y); ctx.stroke();
+  }
+
+  // Points
+  const drawn = pts.map(p => ({
+    px: toCanvasX(p.x), py: toCanvasY(p.y),
+    title: p.title, genre: p.genre,
+    color: genreColors[p.genre]
+  }));
+
+  drawn.forEach(p => {
+    ctx.beginPath();
+    ctx.arc(p.px, p.py, 4, 0, Math.PI*2);
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = 0.75;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = 'rgba(0,0,0,.3)';
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+  });
+
+  // Legende genres
+  const genres = Object.entries(genreColors).slice(0, 8);
+  genres.forEach(([g, c], i) => {
+    const lx = 10, ly = 10 + i * 18;
+    ctx.fillStyle = c;
+    ctx.fillRect(lx, ly, 10, 10);
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '10px JetBrains Mono, monospace';
+    ctx.fillText(g.length > 16 ? g.slice(0,16)+'...' : g, lx+14, ly+9);
+  });
+
+  // Tooltip au survol
+  canvas.onmousemove = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    let found = null;
+    for (const p of drawn) {
+      const dx = p.px - mx, dy = p.py - my;
+      if (Math.sqrt(dx*dx + dy*dy) < 8) { found = p; break; }
+    }
+    if (found) {
+      tooltip.style.display = 'block';
+      tooltip.style.left    = (e.clientX + 14) + 'px';
+      tooltip.style.top     = (e.clientY - 28) + 'px';
+      tooltip.innerHTML     =
+        `<div style="color:${found.color};font-weight:700;margin-bottom:2px;">
+          ${found.genre}</div>
+         <div style="color:#e2e8f0;">${found.title}</div>`;
+      canvas.style.cursor = 'pointer';
+    } else {
+      tooltip.style.display = 'none';
+      canvas.style.cursor = 'crosshair';
+    }
+  };
+  canvas.onmouseleave = () => { tooltip.style.display = 'none'; };
+}
+
+// Mettre a jour le handler socket pour les nouvelles donnees
 socket.on('update', data => {
   const pill   = document.getElementById('statusPill');
   const pulse  = document.getElementById('pulseEl');
@@ -680,15 +1002,11 @@ socket.on('update', data => {
     stText.textContent = 'En attente'; btn.disabled = false;
   }
 
-  // Phases
   if (data.progress) {
     for (const [name, p] of Object.entries(data.progress)) updatePhase(name, p);
   }
-
-  // Stats
   if (data.stats) updateStats(data.stats);
 
-  // Entraînement live
   if (data.training) {
     const tr = data.training;
     const pct = tr.total > 0 ? Math.round((tr.epoch / tr.total) * 100) : 0;
@@ -697,37 +1015,26 @@ socket.on('update', data => {
     document.getElementById('liveLoss').textContent   = tr.loss   || '—';
     document.getElementById('liveRecall').textContent = tr.recall || '—';
     document.getElementById('liveNdcg').textContent   = tr.ndcg   || '—';
-
     if (tr.loss_history && tr.loss_history.length > 1) updateCharts(tr);
   }
 
-  // Log
   if (data.pipeline && data.pipeline.length) {
     const box = document.getElementById('logBox');
     box.innerHTML = data.pipeline.map(l => `<div class="log-line">${l}</div>`).join('');
     box.scrollTop = box.scrollHeight;
   }
 
-  // Recommandations
   if (data.recommendations && data.recommendations.length) {
     buildRecommendations(data.recommendations);
   }
 
-  // Conclusion
+  // t-SNE
+  if (data.tsne_data && data.tsne_data.length) {
+    buildTsne(data.tsne_data);
+  }
+
   if (data.conclusion && data.conclusion.recall) buildConclusion(data.conclusion);
 });
-
-// ── Start ────────────────────────────────────────────────────
-function startPipeline() {
-  if (lossChart)    { lossChart.destroy();    lossChart    = null; }
-  if (metricsChart) { metricsChart.destroy(); metricsChart = null; }
-  document.getElementById('logBox').innerHTML =
-    '<div class="log-line">Initialisation du pipeline LightGCN...</div>';
-  document.getElementById('recoSection').style.display = 'none';
-  document.getElementById('conclusionBlock').className = 'conclusion-block';
-  document.getElementById('trainingLive').style.display = 'none';
-  socket.emit('start');
-}
 
 socket.emit('get_state');
 </script>
